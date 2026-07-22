@@ -18,11 +18,11 @@ BASE_DIR = Path(__file__).parent
 TEAMS = ["sd", "f9", "ssw", "cc", "lg"]
 
 TEAM_NAMES = {
-    "sd": "sd",
-    "f9": "f9",
-    "ssw": "ssw",
-    "cc": "cc",
-    "lg": "lg",
+    "lg": "Lulli Gang",
+    "sd": "Shroff Demolishers",
+    "f9": "Falling 99 Supergiants",
+    "ssw": "Slow Over Rate Super Wizards",
+    "cc": "Capital C",
 }
 
 SQUAD_SIZE = 16  # players per team (per the draft sheet)

@@ -65,6 +65,17 @@ def fmt_dt(value) -> str:
         return str(value)
 
 
+def team_label(code) -> str:
+    return config.TEAM_NAMES.get(str(code), str(code))
+
+
+def with_team_names(df: pd.DataFrame) -> pd.DataFrame:
+    if not df.empty and "Team" in df.columns:
+        df = df.copy()
+        df["Team"] = df["Team"].map(team_label)
+    return df
+
+
 def status_pill(state: str) -> str:
     s = str(state).strip().lower()
     if s in {"ok", "healthy", "running", "success", "up"}:
@@ -218,7 +229,7 @@ if leaderboard_df.empty and player_points_df.empty:
 leader_name, leader_points = "—", "—"
 if not leaderboard_df.empty and {"Team", "Points"}.issubset(leaderboard_df.columns):
     top = leaderboard_df.sort_values("Points", ascending=False).iloc[0]
-    leader_name, leader_points = str(top["Team"]), int(top["Points"])
+    leader_name, leader_points = team_label(top["Team"]), int(top["Points"])
 
 top_player_name, top_player_points = "—", "—"
 if not player_points_df.empty and {"Player", "Points"}.issubset(player_points_df.columns):
@@ -276,8 +287,18 @@ with tab_lead:
     with left:
         st.subheader("Team Leaderboard")
         if not leaderboard_df.empty and {"Team", "Points"}.issubset(leaderboard_df.columns):
-            st.dataframe(leaderboard_df, width='stretch', hide_index=True, height=260)
-            chart_df = leaderboard_df.sort_values("Points", ascending=True)
+            lb_display = with_team_names(leaderboard_df)
+            chart_df = lb_display.sort_values("Points", ascending=True)
+            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+            lb_table = lb_display.copy()
+            lb_table["Rank"] = lb_table["Rank"].map(lambda r: medals.get(int(r), f"{int(r)}"))
+            lb_table = lb_table.rename(columns={"Rank": "", "Team": "Team", "Points": "Points"})
+            st.dataframe(
+                lb_table, width='stretch', hide_index=True, height=245,
+                column_config={"Points": st.column_config.ProgressColumn(
+                    "Points", format="%d",
+                    min_value=0, max_value=int(max(lb_display["Points"].max(), 1)))},
+            )
             if ALTAIR_AVAILABLE:
                 chart = (
                     alt.Chart(chart_df).mark_bar(cornerRadiusTopRight=6, cornerRadiusBottomRight=6)
@@ -293,7 +314,7 @@ with tab_lead:
     with right:
         st.subheader("Team Points Over Time")
         if not history_df.empty and {"snapshot_time", "Team", "Points"}.issubset(history_df.columns):
-            hist = fmt_history(history_df)
+            hist = with_team_names(fmt_history(history_df))
             if ALTAIR_AVAILABLE and not hist.empty:
                 chart = (
                     alt.Chart(hist).mark_line(point=True)
@@ -309,7 +330,7 @@ with tab_lead:
 
     st.subheader("Daily Points Added by Team")
     if not history_df.empty and {"snapshot_time", "Team", "Points"}.issubset(history_df.columns):
-        daily = fmt_history(history_df)
+        daily = with_team_names(fmt_history(history_df))
         daily["Date"] = daily["snapshot_time"].dt.date
         daily = daily.groupby(["Date", "Team"], as_index=False)["Points"].max().sort_values(["Team", "Date"])
         daily["Points_Added"] = daily.groupby("Team")["Points"].diff().fillna(0)
@@ -335,7 +356,7 @@ with tab_players:
         f1, f2, f3 = st.columns(3)
         with f1:
             teams = sorted(player_points_df["Team"].dropna().unique().tolist())
-            sel_teams = st.multiselect("Team", teams, default=teams)
+            sel_teams = st.multiselect("Team", teams, default=teams, format_func=team_label)
         with f2:
             roles = sorted(player_points_df["Role"].dropna().unique().tolist())
             sel_roles = st.multiselect("Role", roles, default=roles)
@@ -366,7 +387,7 @@ with tab_players:
             "Base_Points", "Multiplier", "Points",
         ] if c in view.columns]
         st.dataframe(
-            view[show_cols].sort_values("Points", ascending=False),
+            with_team_names(view[show_cols]).sort_values("Points", ascending=False),
             width='stretch', hide_index=True, height=520,
         )
         st.caption("🅲 = Captain (2× points) · 🆅🅲 = Vice-Captain (1.5× points). "
@@ -384,7 +405,7 @@ with tab_squads:
             n = counts.get(team, 0)
             colour = "#22c55e" if n == config.SQUAD_SIZE else ("#f59e0b" if n > 0 else "#94a3b8")
             st.markdown(
-                f"<div class='metric-card'><div class='metric-label'>{team}</div>"
+                f"<div class='metric-card'><div class='metric-label'>{team_label(team)}</div>"
                 f"<div class='metric-value' style='color:{colour}'>{n}/{config.SQUAD_SIZE}</div>"
                 f"<div class='metric-sub'>players</div></div>",
                 unsafe_allow_html=True,
@@ -395,7 +416,7 @@ with tab_squads:
         a1, a2, a3 = st.columns(3)
         with a1:
             new_name = st.text_input("Player name")
-            new_team = st.selectbox("Team", config.TEAMS)
+            new_team = st.selectbox("Team", config.TEAMS, format_func=team_label)
         with a2:
             new_role = st.selectbox("Role", ["BAT", "BOWL", "AR", "WK"])
             is_captain = st.checkbox("Captain (2×)")
@@ -410,9 +431,9 @@ with tab_squads:
         if not name:
             err = "Enter a player name."
         elif len(team_players) >= config.SQUAD_SIZE:
-            err = f"{new_team} already has {config.SQUAD_SIZE} players."
+            err = f"{team_label(new_team)} already has {config.SQUAD_SIZE} players."
         elif (team_players["Player"].str.lower() == name.lower()).any():
-            err = f"{name} is already in {new_team}."
+            err = f"{name} is already in {team_label(new_team)}."
         elif is_captain and is_vc:
             err = "A player can be either Captain or Vice-Captain, not both."
 
@@ -430,23 +451,26 @@ with tab_squads:
             updated = pd.concat([updated, pd.DataFrame([new_row])], ignore_index=True)
             save_roster(updated)
             st.cache_data.clear()
-            st.success(f"Added {name} to {new_team}. Re-run the pipeline to score them.")
+            st.success(f"Added {name} to {team_label(new_team)}. Re-run the pipeline to score them.")
             st.rerun()
 
     st.markdown("### ✏️ Edit / Remove Players")
     st.caption("Tick **Remove** and click *Save changes* to delete rows. You can also edit "
-               "role and captaincy inline. One Captain and one Vice-Captain per team.")
+               "team, role and captaincy inline. One Captain and one Vice-Captain per team.")
     roster = load_roster()
     if roster.empty:
         st.info("No players yet — add some above.")
     else:
+        team_full_names = [config.TEAM_NAMES[c] for c in config.TEAMS]
+        name_to_code = {config.TEAM_NAMES[c]: c for c in config.TEAMS}
         edit_df = roster.copy()
+        edit_df["Team"] = edit_df["Team"].map(team_label)  # show full names
         edit_df["Remove"] = False
         edited = st.data_editor(
             edit_df,
             width='stretch', hide_index=True, height=460, key="roster_editor",
             column_config={
-                "Team": st.column_config.SelectboxColumn(options=config.TEAMS),
+                "Team": st.column_config.SelectboxColumn(options=team_full_names),
                 "Role": st.column_config.SelectboxColumn(options=["BAT", "BOWL", "AR", "WK"]),
                 "Captain": st.column_config.CheckboxColumn(),
                 "ViceCaptain": st.column_config.CheckboxColumn(),
@@ -454,16 +478,17 @@ with tab_squads:
             },
         )
         if st.button("💾 Save changes"):
-            kept = edited[~edited["Remove"]].drop(columns=["Remove"])
+            kept = edited[~edited["Remove"]].drop(columns=["Remove"]).copy()
+            kept["Team"] = kept["Team"].map(lambda n: name_to_code.get(n, n))  # back to codes
             problems = []
             for team in config.TEAMS:
                 tp = kept[kept["Team"] == team]
                 if len(tp) > config.SQUAD_SIZE:
-                    problems.append(f"{team} has {len(tp)} players (max {config.SQUAD_SIZE}).")
+                    problems.append(f"{team_label(team)} has {len(tp)} players (max {config.SQUAD_SIZE}).")
                 if tp["Captain"].sum() > 1:
-                    problems.append(f"{team} has more than one Captain.")
+                    problems.append(f"{team_label(team)} has more than one Captain.")
                 if tp["ViceCaptain"].sum() > 1:
-                    problems.append(f"{team} has more than one Vice-Captain.")
+                    problems.append(f"{team_label(team)} has more than one Vice-Captain.")
             if problems:
                 st.error(" ".join(problems))
             else:
@@ -490,7 +515,7 @@ with tab_squads:
     if not unmatched.empty:
         with st.expander("⚠️ Players not matched to API stats"):
             cols = [c for c in ["Player", "Team", "Role", "Suggested_Match", "Match_Type"] if c in unmatched.columns]
-            st.dataframe(unmatched[cols], width='stretch', hide_index=True)
+            st.dataframe(with_team_names(unmatched[cols]), width='stretch', hide_index=True)
             st.caption("These roster names could not be linked to a CricketData player. "
                        "Fix the spelling here or add an alias in fantasy_points.py.")
 

@@ -2,10 +2,9 @@ name: Hundred Fantasy Auto Update
 
 on:
   schedule:
-    # Hourly. GitHub cron is UTC. The job is cheap and skips the commit when
-    # nothing changed, so running through the day keeps points fresh after
-    # each match without manual intervention.
-    - cron: "0 * * * *"
+    # Once daily at 03:00 IST. GitHub cron is UTC, and IST = UTC+5:30,
+    # so 03:00 IST == 21:30 UTC the previous day.
+    - cron: "30 21 * * *"
   workflow_dispatch:
 
 permissions:
