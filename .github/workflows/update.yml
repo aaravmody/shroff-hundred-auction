@@ -1,12 +1,19 @@
-name: IPL Auto Update
+name: Hundred Fantasy Auto Update
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Hourly. GitHub cron is UTC. The job is cheap and skips the commit when
+    # nothing changed, so running through the day keeps points fresh after
+    # each match without manual intervention.
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: hundred-update
+  cancel-in-progress: false
 
 jobs:
   update:
@@ -22,20 +29,23 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          python -m playwright install chromium
+        run: pip install -r requirements.txt
 
-      - name: Run scraper
-        run: python ipl_stats_scraper.py
+      - name: Fetch stats from CricketData
+        env:
+          CRICKET_DATA_API_KEY: ${{ secrets.CRICKET_DATA_API_KEY }}
+          HUNDRED_SERIES_ID: ${{ vars.HUNDRED_SERIES_ID }}
+        run: python fetch_hundred_stats.py
 
-      - name: Run fantasy system
-        run: python fantasy_points_from_stats.py
+      - name: Score fantasy squads
+        run: python fantasy_points.py
 
       - name: Commit updated files
         run: |
           git config user.name "auto-bot"
           git config user.email "auto@github.com"
-          git add *.xlsx
-          git diff --cached --quiet || git commit -m "auto update data"
+          git add hundred_player_stats.xlsx Hundred_Fantasy_Points.xlsx \
+                  leaderboard_history.csv player_points_history.csv \
+                  hundred_series.json update_status.json players.csv api_cache 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "auto update fantasy data"
           git push

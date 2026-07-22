@@ -1,6 +1,7 @@
 streamlit
 pandas
 openpyxl
-playwright
+requests
 rapidfuzz
 streamlit-autorefresh
+altair

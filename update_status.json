@@ -1,9 +1,5 @@
 {
-  "last_cycle_started": "2026-06-01T18:30:04.904233+00:00",
-  "server_status": "running",
-  "data_source_status": "healthy",
-  "last_cycle_result": "success",
-  "last_successful_scrape_time": "2026-06-01T18:31:20.790404+00:00",
-  "last_successful_git_push_time": "2026-04-10T18:01:30.463215+00:00",
-  "last_cycle_finished": "2026-06-01T18:31:24.563720+00:00"
+  "last_cycle_result": "not_run_yet",
+  "server_status": "unknown",
+  "data_source_status": "unknown"
 }
