@@ -25,6 +25,15 @@ TEAM_NAMES = {
     "cc": "Capital C",
 }
 
+# Consistent colour per team, used across every chart in the dashboard.
+TEAM_COLORS = {
+    "ssw": "#22d3ee",  # cyan
+    "sd": "#f472b6",   # pink
+    "f9": "#a78bfa",   # violet
+    "lg": "#4ade80",   # green
+    "cc": "#fbbf24",   # amber
+}
+
 SQUAD_SIZE = 16  # players per team (per the draft sheet)
 NUM_TEAMS = len(TEAMS)
 

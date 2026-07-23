@@ -246,11 +246,21 @@ class SeasonAggregate:
     def __init__(self):
         self.display: dict[str, str] = {}
         self.rows: dict[str, dict] = defaultdict(lambda: defaultdict(float))
+        # One record per (match, player): base points scored in that match.
+        self.match_player_rows: list[dict] = []
 
-    def add_match(self, acc: MatchAccumulator):
+    def add_match(self, acc: MatchAccumulator, match_no: int = 0, match_label: str = "", match_date: str = ""):
         for key, perf in acc.perf.items():
             self.display.setdefault(key, acc.display[key])
             pts = scoring.match_points(perf, lineup_bonus=True)
+            if pts["total"]:
+                self.match_player_rows.append({
+                    "MatchNo": match_no,
+                    "Match": match_label,
+                    "Date": match_date,
+                    "Player": acc.display[key],
+                    "MatchPoints": int(pts["total"]),
+                })
             r = self.rows[key]
             r["Matches"] += 1
             # raw batting
@@ -374,23 +384,31 @@ def fetch_and_build() -> pd.DataFrame:
     match_records = []
     processed = 0
 
-    for m in match_list:
+    # Process started matches in chronological order so match numbers line up.
+    started_matches = [m for m in match_list if bool(m.get("matchStarted")) and m.get("id")]
+    started_matches.sort(key=lambda m: str(m.get("dateTimeGMT") or m.get("date") or ""))
+
+    def short_label(name: str, idx: int) -> str:
+        # "MI London vs Sunrisers Leeds, 1st Match, ..." -> "M1: MI London v Sunrisers Leeds"
+        teams = str(name).split(",")[0].replace(" vs ", " v ")
+        return f"M{idx}: {teams}"
+
+    for idx, m in enumerate(started_matches, start=1):
         match_id = str(m.get("id", ""))
-        if not match_id:
-            continue
-        started = bool(m.get("matchStarted"))
         name = m.get("name", "")
         status = m.get("status", "")
+        label = short_label(name, idx)
+        mdate = str(m.get("date", ""))
 
-        record = {"Match": name, "Status": status, "Started": started, "Processed": False}
-        if started:
-            scard = client.match_scorecard(match_id)
-            if scard and scard.get("scorecard"):
-                acc = parse_scorecard(scard)
-                season.add_match(acc)
-                processed += 1
-                record["Processed"] = True
-                record["Status"] = scard.get("status", status)
+        record = {"MatchNo": idx, "Match": name, "Label": label,
+                  "Date": mdate, "Status": status, "Processed": False}
+        scard = client.match_scorecard(match_id)
+        if scard and scard.get("scorecard"):
+            acc = parse_scorecard(scard)
+            season.add_match(acc, match_no=idx, match_label=label, match_date=mdate)
+            processed += 1
+            record["Processed"] = True
+            record["Status"] = scard.get("status", status)
         match_records.append(record)
 
     print(f"Scorecards processed: {processed}")
@@ -407,12 +425,17 @@ def fetch_and_build() -> pd.DataFrame:
         ["Player", "Matches", "Wickets", "Maidens"]
     ].head(30)
     matches_df = pd.DataFrame(match_records)
+    match_player_df = pd.DataFrame(
+        season.match_player_rows,
+        columns=["MatchNo", "Match", "Date", "Player", "MatchPoints"],
+    )
 
     with pd.ExcelWriter(config.PLAYER_STATS_FILE, engine="openpyxl") as writer:
         player_df.to_excel(writer, sheet_name="Player_Stats", index=False)
         top_runs.to_excel(writer, sheet_name="Top_Runs", index=False)
         top_wkts.to_excel(writer, sheet_name="Top_Wickets", index=False)
         matches_df.to_excel(writer, sheet_name="Matches", index=False)
+        match_player_df.to_excel(writer, sheet_name="Match_Player_Points", index=False)
 
     print(f"Saved: {config.PLAYER_STATS_FILE}")
     return player_df

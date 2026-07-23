@@ -99,6 +99,16 @@ def with_team_names(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def team_color_scale():
+    """Altair colour scale keyed on full team names, consistent everywhere."""
+    domain = [config.TEAM_NAMES[c] for c in config.TEAMS]
+    rng = [config.TEAM_COLORS[c] for c in config.TEAMS]
+    return alt.Scale(domain=domain, range=rng)
+
+
+TEAM_LEGEND = alt.Legend(orient="bottom", title=None, columns=3, labelLimit=220)
+
+
 def status_pill(state: str) -> str:
     s = str(state).strip().lower()
     if s in {"ok", "healthy", "running", "success", "up"}:
@@ -232,6 +242,7 @@ mismatch_df = load_sheet("Possible_Mismatch")
 top_runs_df = load_stats_sheet("Top_Runs")
 top_wkts_df = load_stats_sheet("Top_Wickets")
 matches_df = load_stats_sheet("Matches")
+match_team_df = load_sheet("Match_Team_Points")
 history_df = load_csv(config.LEADERBOARD_HISTORY_FILE)
 status_data = load_status()
 
@@ -249,15 +260,24 @@ if leaderboard_df.empty and player_points_df.empty:
 # ----------------------------------------------------------------------------
 # Summary cards
 # ----------------------------------------------------------------------------
-leader_name, leader_points = "—", "—"
+leader_name, leader_sub, leader_color = "—", "—", "#ffffff"
 if not leaderboard_df.empty and {"Team", "Points"}.issubset(leaderboard_df.columns):
-    top = leaderboard_df.sort_values("Points", ascending=False).iloc[0]
-    leader_name, leader_points = team_label(top["Team"]), int(top["Points"])
+    lb_sorted = leaderboard_df.sort_values("Points", ascending=False).reset_index(drop=True)
+    top = lb_sorted.iloc[0]
+    leader_name = team_label(top["Team"])
+    leader_color = config.TEAM_COLORS.get(str(top["Team"]), "#ffffff")
+    lead_pts = int(top["Points"])
+    if len(lb_sorted) >= 2:
+        margin = lead_pts - int(lb_sorted.iloc[1]["Points"])
+        leader_sub = f"{lead_pts} pts · +{margin} ahead"
+    else:
+        leader_sub = f"{lead_pts} pts"
 
-top_player_name, top_player_points = "—", "—"
+top_player_name, top_player_sub = "—", "—"
 if not player_points_df.empty and {"Player", "Points"}.issubset(player_points_df.columns):
     p = player_points_df.sort_values("Points", ascending=False).iloc[0]
-    top_player_name, top_player_points = str(p["Player"]), int(p["Points"])
+    top_player_name = str(p["Player"]).title()
+    top_player_sub = f"{int(p['Points'])} pts · {team_label(p.get('Team', ''))}"
 
 matches_played = 0
 if not matches_df.empty and "Processed" in matches_df.columns:
@@ -265,16 +285,18 @@ if not matches_df.empty and "Processed" in matches_df.columns:
 
 c1, c2, c3, c4 = st.columns(4)
 cards = [
-    ("Current Leader", leader_name, f"{leader_points} pts"),
-    ("Top Player", top_player_name, f"{top_player_points} pts"),
-    ("Matches Scored", str(matches_played), "from CricketData"),
-    ("Teams", str(config.NUM_TEAMS), f"{config.SQUAD_SIZE} players each"),
+    ("🏆 Current Leader", leader_name, leader_sub, leader_color),
+    ("⭐ Top Player", top_player_name, top_player_sub, "#ffffff"),
+    ("🏏 Matches Scored", str(matches_played), "from CricketData", "#ffffff"),
+    ("👥 Teams", str(config.NUM_TEAMS), f"{config.SQUAD_SIZE} players each", "#ffffff"),
 ]
-for col, (label, value, sub) in zip((c1, c2, c3, c4), cards):
+for col, (label, value, sub, colour) in zip((c1, c2, c3, c4), cards):
     with col:
         st.markdown(
-            f"""<div class="metric-card"><div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div><div class="metric-sub">{sub}</div></div>""",
+            f"""<div class="metric-card" style="border-left:4px solid {colour}">
+            <div class="metric-label">{label}</div>
+            <div class="metric-value" style="color:{colour}">{value}</div>
+            <div class="metric-sub">{sub}</div></div>""",
             unsafe_allow_html=True,
         )
 
@@ -306,69 +328,82 @@ tab_lead, tab_players, tab_squads, tab_raw, tab_rules = st.tabs(
 
 # ---- Leaderboard tab ----
 with tab_lead:
-    left, right = st.columns((1.05, 0.95))
-    with left:
-        st.subheader("Team Leaderboard")
-        if not leaderboard_df.empty and {"Team", "Points"}.issubset(leaderboard_df.columns):
-            lb_display = with_team_names(leaderboard_df)
-            chart_df = lb_display.sort_values("Points", ascending=True)
+    st.subheader("Team Leaderboard")
+    if not leaderboard_df.empty and {"Team", "Points"}.issubset(leaderboard_df.columns):
+        lb_display = with_team_names(leaderboard_df)
+        left, right = st.columns((0.9, 1.1))
+        with left:
             medals = {1: "🥇", 2: "🥈", 3: "🥉"}
             lb_table = lb_display.copy()
             lb_table["Rank"] = lb_table["Rank"].map(lambda r: medals.get(int(r), f"{int(r)}"))
-            lb_table = lb_table.rename(columns={"Rank": "", "Team": "Team", "Points": "Points"})
+            lb_table = lb_table.rename(columns={"Rank": ""})
             st.dataframe(
-                lb_table, width='stretch', hide_index=True, height=245,
+                lb_table, width='stretch', hide_index=True, height=250,
                 column_config={"Points": st.column_config.ProgressColumn(
                     "Points", format="%d",
                     min_value=0, max_value=int(max(lb_display["Points"].max(), 1)))},
             )
+        with right:
             if ALTAIR_AVAILABLE:
                 chart = (
-                    alt.Chart(chart_df).mark_bar(cornerRadiusTopRight=6, cornerRadiusBottomRight=6)
-                    .encode(x=alt.X("Points:Q"), y=alt.Y("Team:N", sort="-x"), tooltip=["Team", "Points"])
-                    .properties(height=280)
+                    alt.Chart(lb_display).mark_bar(cornerRadiusTopRight=6, cornerRadiusBottomRight=6)
+                    .encode(
+                        x=alt.X("Points:Q", title=None),
+                        y=alt.Y("Team:N", sort="-x", title=None),
+                        color=alt.Color("Team:N", scale=team_color_scale(), legend=None),
+                        tooltip=["Team", "Points"],
+                    )
+                    .properties(height=250)
                 )
                 st.altair_chart(chart, width='stretch')
             else:
-                st.bar_chart(chart_df.set_index("Team")["Points"])
-        else:
-            st.info("Leaderboard appears once squads have scoring players.")
+                st.bar_chart(lb_display.set_index("Team")["Points"])
+    else:
+        st.info("Leaderboard appears once squads have scoring players.")
 
-    with right:
-        st.subheader("Team Points Over Time")
-        if not history_df.empty and {"snapshot_time", "Team", "Points"}.issubset(history_df.columns):
-            hist = with_team_names(fmt_history(history_df))
-            if ALTAIR_AVAILABLE and not hist.empty:
-                chart = (
-                    alt.Chart(hist).mark_line(point=True)
-                    .encode(x=alt.X("snapshot_time:T", title="Time"), y="Points:Q",
-                            color="Team:N", tooltip=["Team", "snapshot_time", "Points"])
-                    .properties(height=560)
-                )
-                st.altair_chart(chart, width='stretch')
-            else:
-                st.line_chart(hist.pivot_table(index="snapshot_time", columns="Team", values="Points"))
-        else:
-            st.info("Trend chart builds up as snapshots accumulate.")
-
-    st.subheader("Daily Points Added by Team")
-    if not history_df.empty and {"snapshot_time", "Team", "Points"}.issubset(history_df.columns):
-        daily = with_team_names(fmt_history(history_df))
-        daily["Date"] = daily["snapshot_time"].dt.date
-        daily = daily.groupby(["Date", "Team"], as_index=False)["Points"].max().sort_values(["Team", "Date"])
-        daily["Points_Added"] = daily.groupby("Team")["Points"].diff().fillna(0)
-        if ALTAIR_AVAILABLE and not daily.empty:
+    # ---- Points gained per match (the requested chart) ----
+    st.subheader("Points Gained Per Match")
+    if not match_team_df.empty and {"MatchNo", "Match", "Team", "Points"}.issubset(match_team_df.columns):
+        mt = with_team_names(match_team_df).sort_values("MatchNo")
+        match_order = mt.drop_duplicates("MatchNo").sort_values("MatchNo")["Match"].tolist()
+        if ALTAIR_AVAILABLE:
             chart = (
-                alt.Chart(daily).mark_bar()
-                .encode(x="Date:T", y=alt.Y("Points_Added:Q", title="Points Added"),
-                        color="Team:N", tooltip=["Team", "Date", "Points_Added"])
-                .properties(height=320)
+                alt.Chart(mt).mark_bar()
+                .encode(
+                    x=alt.X("Match:N", sort=match_order, title=None,
+                            axis=alt.Axis(labelAngle=0, labelLimit=200)),
+                    xOffset=alt.XOffset("Team:N", sort=[config.TEAM_NAMES[c] for c in config.TEAMS]),
+                    y=alt.Y("Points:Q", title="Points gained"),
+                    color=alt.Color("Team:N", scale=team_color_scale(), legend=TEAM_LEGEND),
+                    tooltip=["Match", "Team", "Points"],
+                )
+                .properties(height=380)
             )
             st.altair_chart(chart, width='stretch')
         else:
-            st.info("Daily deltas appear after two or more snapshots.")
+            st.bar_chart(mt.pivot_table(index="Match", columns="Team", values="Points"))
+        st.caption("How many fantasy points each team earned in each completed match "
+                   "(captain / vice-captain multipliers included).")
     else:
-        st.info("Daily deltas appear once history is recorded across match days.")
+        st.info("This chart populates as matches are played.")
+
+    # ---- Cumulative points over time ----
+    st.subheader("Team Points Over Time")
+    if not history_df.empty and {"snapshot_time", "Team", "Points"}.issubset(history_df.columns):
+        hist = with_team_names(fmt_history(history_df))
+        if ALTAIR_AVAILABLE and not hist.empty:
+            chart = (
+                alt.Chart(hist).mark_line(point=True)
+                .encode(x=alt.X("snapshot_time:T", title=None), y=alt.Y("Points:Q", title="Total points"),
+                        color=alt.Color("Team:N", scale=team_color_scale(), legend=TEAM_LEGEND),
+                        tooltip=["Team", "snapshot_time", "Points"])
+                .properties(height=340)
+            )
+            st.altair_chart(chart, width='stretch')
+        else:
+            st.line_chart(hist.pivot_table(index="snapshot_time", columns="Team", values="Points"))
+    else:
+        st.info("Trend line builds up as the tournament progresses.")
 
 # ---- Player Points tab ----
 with tab_players:

@@ -145,23 +145,31 @@ def ai_style_match(player: str, stats_names: list[str]) -> Tuple[Optional[str], 
             if not is_blocked_pair(player, s):
                 return s, "surname+firstname"
 
-    ranked = process.extract(player, stats_names, scorer=fuzz.token_sort_ratio, limit=5)
-    if not ranked:
+    # Fuzzy, but the SURNAME must be similar. Without this, a not-yet-played
+    # player collapses onto a same-first-name stranger (e.g. david willey ->
+    # david miller). Surname gating rejects those while still allowing
+    # misspelled surnames (bevis/brevis, jasen/jansen, tougue/tongue).
+    p_last = last_token(player)
+    candidates = []
+    for s in stats_names:
+        if is_blocked_pair(player, s):
+            continue
+        surname_sim = fuzz.ratio(p_last, last_token(s))
+        if surname_sim < 80 and last_token(s) != p_last:
+            continue
+        candidates.append((s, fuzz.token_sort_ratio(player, s)))
+    if not candidates:
         return None, "no_stats_yet"
-    top_name, top_score, _ = ranked[0]
-    second_score = ranked[1][1] if len(ranked) > 1 else 0
 
-    if is_blocked_pair(player, top_name):
-        return None, "no_stats_yet"
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    top_name, top_score = candidates[0]
+    second_score = candidates[1][1] if len(candidates) > 1 else 0
 
-    # Strong outright match.
-    if top_score >= 90:
+    if top_score >= 88:
         return top_name, f"fuzzy:{top_score}"
-    # Misspelled surname but clearly the closest name in the pool.
-    if top_score >= 80 and (top_score - second_score) >= 8:
+    if top_score >= 78 and (top_score - second_score) >= 6:
         return top_name, f"fuzzy_margin:{top_score}"
-    # Plausible but ambiguous -> leave for manual review.
-    if top_score >= 74:
+    if top_score >= 72:
         return None, f"possible_mismatch:{top_score}"
     return None, "no_stats_yet"
 
@@ -225,6 +233,31 @@ def match_players(players_df: pd.DataFrame, stats: pd.DataFrame) -> pd.DataFrame
     out["Matched_Player"] = resolved
     out["Suggested_Match"] = suggested
     out["Match_Type"] = notes
+
+    # Safety net: one API player must not be claimed by two roster entries.
+    # If it happens, keep the strongest match (exact > structured > higher
+    # fuzzy score) and release the weaker one.
+    def match_rank(note: str) -> float:
+        note = str(note)
+        if note.startswith("exact"):
+            return 1000.0
+        if note.startswith("surname+firstname"):
+            return 500.0
+        if ":" in note:
+            try:
+                return float(note.split(":")[1])
+            except ValueError:
+                return 0.0
+        return 0.0
+
+    for name, idxs in out.groupby("Matched_Player").groups.items():
+        if not str(name).strip() or len(idxs) < 2:
+            continue
+        ranked = sorted(idxs, key=lambda i: match_rank(out.at[i, "Match_Type"]), reverse=True)
+        for i in ranked[1:]:  # release all but the best
+            out.at[i, "Suggested_Match"] = out.at[i, "Matched_Player"]
+            out.at[i, "Matched_Player"] = ""
+            out.at[i, "Match_Type"] = "duplicate_release"
     return out
 
 
@@ -288,11 +321,50 @@ def build_leaderboard(points_df: pd.DataFrame) -> pd.DataFrame:
     return leaderboard
 
 
+def build_match_team_points(points_df: pd.DataFrame) -> pd.DataFrame:
+    """Points each team gained in each match (base points x captaincy).
+
+    Reads the per-match, per-player table produced by fetch_hundred_stats and
+    rolls it up to (match, team) using the roster match + captain multiplier.
+    """
+    cols = ["MatchNo", "Match", "Team", "Points"]
+    try:
+        mpp = pd.read_excel(config.PLAYER_STATS_FILE, sheet_name="Match_Player_Points")
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    if mpp.empty:
+        return pd.DataFrame(columns=cols)
+
+    # api canonical name -> (team, multiplier) from the resolved roster
+    team_mult = {}
+    for _, r in points_df.iterrows():
+        key = str(r.get("Matched_Player", "")).strip()
+        if key:
+            team_mult[key] = (r["Team"], float(r.get("Multiplier", 1.0)))
+
+    mpp["key"] = mpp["Player"].apply(canonical_name)
+    mpp = mpp[mpp["key"].isin(set(team_mult))].copy()
+    if mpp.empty:
+        return pd.DataFrame(columns=cols)
+    mpp["Team"] = mpp["key"].map(lambda k: team_mult[k][0])
+    mpp["Points"] = mpp.apply(lambda r: r["MatchPoints"] * team_mult[r["key"]][1], axis=1)
+
+    grouped = mpp.groupby(["MatchNo", "Match", "Team"], as_index=False)["Points"].sum()
+
+    # Ensure every team has a bar for every played match (fill absent with 0).
+    matches = grouped[["MatchNo", "Match"]].drop_duplicates()
+    grid = matches.merge(pd.DataFrame({"Team": config.TEAMS}), how="cross")
+    out = grid.merge(grouped, on=["MatchNo", "Match", "Team"], how="left").fillna({"Points": 0})
+    out["Points"] = out["Points"].round().astype(int)
+    return out.sort_values(["MatchNo", "Team"]).reset_index(drop=True)
+
+
 def main() -> None:
     players_df = load_players()
     stats = load_stats()
     points_df = calculate_points(players_df, stats)
     leaderboard_df = build_leaderboard(points_df)
+    match_team_df = build_match_team_points(points_df)
 
     no_stats_df = points_df[points_df["Match_Type"] == "no_stats_yet"].copy()
     mismatch_df = points_df[points_df["Match_Type"].astype(str).str.contains("possible_mismatch", na=False)].copy()
@@ -307,6 +379,7 @@ def main() -> None:
         no_stats_df.to_excel(writer, sheet_name="No_Stats_Yet", index=False)
         mismatch_df.to_excel(writer, sheet_name="Possible_Mismatch", index=False)
         ai_matches_df.to_excel(writer, sheet_name="AI_Matches", index=False)
+        match_team_df.to_excel(writer, sheet_name="Match_Team_Points", index=False)
 
     print(f"Saved: {config.FANTASY_WORKBOOK}")
     print(leaderboard_df.to_string(index=False))
