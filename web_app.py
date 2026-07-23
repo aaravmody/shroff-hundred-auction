@@ -69,6 +69,16 @@ st.markdown(
         .pill-bad { display:inline-block; padding:0.18rem 0.6rem; border-radius:999px;
                     background:rgba(239,68,68,0.15); color:#ef4444; font-size:0.82rem; font-weight:600; }
         .small-note { color:#94a3b8; font-size:0.88rem; }
+
+        /* --- mobile --- */
+        @media (max-width: 640px) {
+            .block-container { padding-left: 0.6rem; padding-right: 0.6rem; }
+            h1 { font-size: 1.35rem !important; }
+            .metric-card { min-height: auto; padding: 0.65rem 0.8rem; border-radius: 14px; }
+            .metric-label { font-size: 0.82rem; }
+            .metric-value { font-size: 1.2rem; line-height: 1.25; }
+            .metric-sub { font-size: 0.76rem; }
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -345,45 +355,53 @@ with tab_lead:
             )
         with right:
             if ALTAIR_AVAILABLE:
-                chart = (
-                    alt.Chart(lb_display).mark_bar(cornerRadiusTopRight=6, cornerRadiusBottomRight=6)
-                    .encode(
-                        x=alt.X("Points:Q", title=None),
-                        y=alt.Y("Team:N", sort="-x", title=None),
-                        color=alt.Color("Team:N", scale=team_color_scale(), legend=None),
-                        tooltip=["Team", "Points"],
-                    )
-                    .properties(height=250)
+                base = alt.Chart(lb_display).encode(
+                    x=alt.X("Points:Q", title=None, scale=alt.Scale(domainMin=0),
+                            axis=alt.Axis(labels=False, grid=False, ticks=False)),
+                    y=alt.Y("Team:N", sort="-x", title=None, axis=alt.Axis(labelLimit=180)),
                 )
-                st.altair_chart(chart, width='stretch')
+                bars = base.mark_bar(cornerRadiusTopRight=6, cornerRadiusBottomRight=6).encode(
+                    color=alt.Color("Team:N", scale=team_color_scale(), legend=None),
+                    tooltip=["Team", "Points"],
+                )
+                labels = base.mark_text(align="left", dx=4, color="#e5e7eb", fontWeight="bold").encode(
+                    text="Points:Q"
+                )
+                st.altair_chart((bars + labels).properties(height=250), width='stretch')
             else:
                 st.bar_chart(lb_display.set_index("Team")["Points"])
     else:
         st.info("Leaderboard appears once squads have scoring players.")
 
-    # ---- Points gained per match (the requested chart) ----
+    # ---- Points gained per match: one swipeable view per match ----
     st.subheader("Points Gained Per Match")
     if not match_team_df.empty and {"MatchNo", "Match", "Team", "Points"}.issubset(match_team_df.columns):
-        mt = with_team_names(match_team_df).sort_values("MatchNo")
-        match_order = mt.drop_duplicates("MatchNo").sort_values("MatchNo")["Match"].tolist()
-        if ALTAIR_AVAILABLE:
-            chart = (
-                alt.Chart(mt).mark_bar()
-                .encode(
-                    x=alt.X("Match:N", sort=match_order, title=None,
-                            axis=alt.Axis(labelAngle=0, labelLimit=200)),
-                    xOffset=alt.XOffset("Team:N", sort=[config.TEAM_NAMES[c] for c in config.TEAMS]),
-                    y=alt.Y("Points:Q", title="Points gained"),
-                    color=alt.Color("Team:N", scale=team_color_scale(), legend=TEAM_LEGEND),
-                    tooltip=["Match", "Team", "Points"],
-                )
-                .properties(height=380)
-            )
-            st.altair_chart(chart, width='stretch')
-        else:
-            st.bar_chart(mt.pivot_table(index="Match", columns="Team", values="Points"))
-        st.caption("How many fantasy points each team earned in each completed match "
-                   "(captain / vice-captain multipliers included).")
+        mt = with_team_names(match_team_df)
+        # Most recent match first so the default tab shows the latest result.
+        meta = mt.drop_duplicates("MatchNo")[["MatchNo", "Match"]].sort_values("MatchNo", ascending=False)
+        st.caption("Points each team earned in a single match (captain / vice-captain "
+                   "multipliers included). Swipe or tap a match.")
+        match_tabs = st.tabs([f"M{int(n)}" for n in meta["MatchNo"]])
+        for tab, (_, row) in zip(match_tabs, meta.iterrows()):
+            with tab:
+                sub = mt[mt["MatchNo"] == row["MatchNo"]].sort_values("Points", ascending=False)
+                st.markdown(f"**{row['Match']}**")
+                if ALTAIR_AVAILABLE:
+                    base = alt.Chart(sub).encode(
+                        x=alt.X("Points:Q", title=None, scale=alt.Scale(domainMin=0),
+                                axis=alt.Axis(labels=False, grid=False, ticks=False)),
+                        y=alt.Y("Team:N", sort="-x", title=None, axis=alt.Axis(labelLimit=180)),
+                    )
+                    bars = base.mark_bar(cornerRadiusTopRight=5, cornerRadiusBottomRight=5).encode(
+                        color=alt.Color("Team:N", scale=team_color_scale(), legend=None),
+                        tooltip=["Team", "Points"],
+                    )
+                    labels = base.mark_text(align="left", dx=4, color="#e5e7eb", fontWeight="bold").encode(
+                        text="Points:Q"
+                    )
+                    st.altair_chart((bars + labels).properties(height=230), width='stretch')
+                else:
+                    st.bar_chart(sub.set_index("Team")["Points"])
     else:
         st.info("This chart populates as matches are played.")
 
