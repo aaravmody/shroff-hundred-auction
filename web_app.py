@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import json
@@ -25,6 +26,28 @@ except Exception:
 
 
 st.set_page_config(page_title="The Hundred Fantasy", page_icon="🏏", layout="wide")
+
+
+def _resolve_api_key() -> str:
+    """Find the CricketData key from the env var OR Streamlit secrets.
+
+    On Streamlit Community Cloud the key is entered under *Secrets* and read via
+    ``st.secrets``; we also mirror it into ``os.environ`` so config and the
+    fetch subprocess (which read the env var) pick it up.
+    """
+    key = os.environ.get("CRICKET_DATA_API_KEY", "").strip()
+    if not key:
+        try:
+            key = str(st.secrets["CRICKET_DATA_API_KEY"]).strip()
+        except Exception:
+            key = ""
+    if key:
+        os.environ["CRICKET_DATA_API_KEY"] = key
+        config.CRICKET_DATA_API_KEY = key
+    return key
+
+
+_resolve_api_key()
 
 st.markdown(
     """
