@@ -39,12 +39,18 @@ jobs:
       - name: Score fantasy squads
         run: python fantasy_points.py
 
+      - name: Snapshot history (for trend charts)
+        run: python -c "import auto_update_and_push as a; a.update_history_files()"
+
       - name: Commit updated files
         run: |
           git config user.name "auto-bot"
           git config user.email "auto@github.com"
-          git add hundred_player_stats.xlsx Hundred_Fantasy_Points.xlsx \
-                  leaderboard_history.csv player_points_history.csv \
-                  hundred_series.json update_status.json players.csv api_cache 2>/dev/null || true
-          git diff --cached --quiet || git commit -m "auto update fantasy data"
-          git push
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "auto update fantasy data"
+            git pull --rebase origin main
+            git push
+          fi
